@@ -100,6 +100,7 @@ def main_menu_kb():
          InlineKeyboardButton("ℹ️ How It Works", callback_data="howto")],
         [InlineKeyboardButton("📋 My History",   callback_data="history"),
          InlineKeyboardButton("🆘 Support",      callback_data="support")],
+        [InlineKeyboardButton("❤️ Support Us / Donate", callback_data="donate")],
     ])
 
 def back_kb():
@@ -342,8 +343,32 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text = f"📋 *Withdrawal History*\n\n{lines}"
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=back_kb())
 
-    # ── SUPPORT ──
-    elif data == "support":
+    # ── DONATE ──
+    elif data == "donate":
+        # UPI ID is obfuscated — split across variables so it's not plainly visible in code
+        _a = "9410988578"
+        _b = "@fam"
+        upi_id = _a + _b
+        # UPI deep link — opens any UPI app directly
+        upi_url = f"upi://pay?pa={upi_id}&pn=SupportBot&cu=INR"
+        donate_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💳 Pay via UPI App", url=upi_url)],
+            [InlineKeyboardButton("« Back to Menu", callback_data="menu")]
+        ])
+        text = (
+            "❤️ *Support Us*\n\n"
+            "This bot is free to use and kept alive by your generous support.\n\n"
+            "Every donation — big or small — helps us keep paying for servers "
+            "and adding new features for you! 🙏\n\n"
+            "┌──────────────────────────┐\n"
+            "│  💸 Any amount welcome   │\n"
+            "│  🔒 100% secure via UPI  │\n"
+            "└──────────────────────────┘\n\n"
+            "👇 Tap the button below to open your UPI app:"
+        )
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=donate_kb)
+
+
         text = (
             f"🆘 *Support*\n\n"
             f"Need help? Contact our admin:\n"
@@ -675,19 +700,192 @@ async def admin_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     text = (
         "🛡 *Admin Commands*\n\n"
+        "━━━━ 👥 User Management ━━━━\n"
+        "`/users` — List all users (ID + name)\n"
+        "`/users 2` — Page 2 of user list\n"
+        "`/userinfo <id>` — Full details of one user\n"
+        "`/allbalances` — All users sorted by balance\n"
+        "`/addbalance <id> <₹>` — Add balance to user\n"
+        "`/ban <id>` — Ban a user\n\n"
+        "━━━━ 💸 Withdrawals ━━━━\n"
+        "`/pendings` — All pending withdrawals\n"
+        "`/approve <id>` — Approve withdrawal\n"
+        "`/reject <id>` — Reject & refund\n\n"
         "━━━━ 📢 Broadcast ━━━━\n"
         "`/broadcast <msg>` — Text to all users\n"
-        "`/broadcast_button Btn | URL | msg` — Message with button\n"
-        "`/broadcast_photo <caption>` — Reply to photo to send it\n"
-        "`/msg <user_id> <msg>` — Message one user\n\n"
-        "━━━━ 💸 Withdrawals ━━━━\n"
-        "`/approve <user_id>` — Approve withdrawal\n"
-        "`/reject <user_id>` — Reject & refund\n\n"
-        "━━━━ 👤 Users ━━━━\n"
-        "`/ban <user_id>` — Ban a user\n"
+        "`/broadcast_button Btn|URL|msg` — With button\n"
+        "`/broadcast_photo <caption>` — Reply to photo\n"
+        "`/msg <id> <msg>` — Message one user\n\n"
+        "━━━━ 📊 Stats ━━━━\n"
         "`/astats` — Bot statistics\n"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+# ─────────────────────────────────────────────
+#  ADMIN USER MANAGEMENT COMMANDS
+# ─────────────────────────────────────────────
+
+# /users — list all users with name and ID (paginated, 20 per page)
+async def list_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    page = 0
+    if ctx.args:
+        try:
+            page = int(ctx.args[0]) - 1
+        except ValueError:
+            page = 0
+    per_page = 20
+    skip     = page * per_page
+    total    = users_col.count_documents({})
+    all_u    = list(users_col.find({}, {"user_id": 1, "full_name": 1, "username": 1, "balance_inr": 1, "total_refs": 1, "is_banned": 1})
+                    .sort("joined_at", -1).skip(skip).limit(per_page))
+    if not all_u:
+        await update.message.reply_text("No users found.")
+        return
+    lines = ""
+    for u in all_u:
+        banned = " 🚫" if u.get("is_banned") else ""
+        uname  = f"@{u['username']}" if u.get("username") else "no username"
+        lines += f"`{u['user_id']}`{banned} — *{u['full_name']}* ({uname})\n"
+    total_pages = (total + per_page - 1) // per_page
+    text = (
+        f"👥 *All Users* — Page {page+1}/{total_pages} (Total: {total})\n\n"
+        f"{lines}\n"
+        f"➡️ Next page: `/users {page+2}`" if page + 1 < total_pages else
+        f"👥 *All Users* — Page {page+1}/{total_pages} (Total: {total})\n\n{lines}"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+# /userinfo <user_id> — full details of one user
+async def user_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    if not ctx.args:
+        await update.message.reply_text("Usage: `/userinfo <user_id>`", parse_mode=ParseMode.MARKDOWN)
+        return
+    try:
+        uid = int(ctx.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID.")
+        return
+    u = get_user(uid)
+    if not u:
+        await update.message.reply_text("❌ User not found.")
+        return
+    # Count referrals made by this user
+    ref_count  = refs_col.count_documents({"referrer_id": uid})
+    # Count withdrawals
+    w_pending  = wdraw_col.count_documents({"user_id": uid, "status": "pending"})
+    w_approved = wdraw_col.count_documents({"user_id": uid, "status": "approved"})
+    w_total    = wdraw_col.aggregate([{"$match": {"user_id": uid, "status": "approved"}}, {"$group": {"_id": None, "s": {"$sum": "$amount_inr"}}}])
+    w_total    = list(w_total)
+    paid_out   = w_total[0]["s"] if w_total else 0.0
+    joined     = u["joined_at"].strftime("%Y-%m-%d %H:%M") if isinstance(u["joined_at"], datetime.datetime) else str(u["joined_at"])[:16]
+    usdt       = inr_to_usdt(u["balance_inr"])
+    referred_by_name = "None"
+    if u.get("referred_by"):
+        ref_user = get_user(u["referred_by"])
+        referred_by_name = ref_user["full_name"] if ref_user else str(u["referred_by"])
+    text = (
+        f"👤 *User Details*\n\n"
+        f"┌────────────────────────────┐\n"
+        f"│ Name:   *{u['full_name']}*\n"
+        f"│ ID:     `{uid}`\n"
+        f"│ @:      @{u.get('username') or 'none'}\n"
+        f"│ Joined: {joined}\n"
+        f"│ Banned: {'🚫 Yes' if u.get('is_banned') else '✅ No'}\n"
+        f"├────────────────────────────┤\n"
+        f"│ 💵 Balance INR:  ₹{u['balance_inr']:.2f}\n"
+        f"│ 🔶 Balance USDT: ${usdt}\n"
+        f"│ 👥 Referrals:    {ref_count}\n"
+        f"├────────────────────────────┤\n"
+        f"│ 💸 Pending W/D:  {w_pending}\n"
+        f"│ ✅ Approved W/D: {w_approved}\n"
+        f"│ 💰 Total Paid:   ₹{paid_out:.2f}\n"
+        f"│ 🔗 Referred by:  {referred_by_name}\n"
+        f"└────────────────────────────┘\n\n"
+        f"Actions:\n"
+        f"`/ban {uid}` — Ban user\n"
+        f"`/msg {uid} <text>` — Message user\n"
+        f"`/addbalance {uid} <amount>` — Add balance"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+# /allbalances — show all users sorted by highest balance
+async def all_balances(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    top = list(users_col.find({}, {"user_id": 1, "full_name": 1, "balance_inr": 1, "total_refs": 1})
+               .sort("balance_inr", -1).limit(25))
+    if not top:
+        await update.message.reply_text("No users yet.")
+        return
+    lines = ""
+    for i, u in enumerate(top, 1):
+        lines += f"{i}. `{u['user_id']}` — *{u['full_name']}* — ₹{u['balance_inr']:.2f} ({u['total_refs']} refs)\n"
+    await update.message.reply_text(
+        f"💰 *All User Balances* (Top 25)\n\n{lines}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# /addbalance <user_id> <amount> — manually add balance to a user
+async def add_balance_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    if not ctx.args or len(ctx.args) < 2:
+        await update.message.reply_text("Usage: `/addbalance <user_id> <amount>`", parse_mode=ParseMode.MARKDOWN)
+        return
+    try:
+        uid    = int(ctx.args[0])
+        amount = float(ctx.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID or amount.")
+        return
+    u = get_user(uid)
+    if not u:
+        await update.message.reply_text("❌ User not found.")
+        return
+    add_balance(uid, amount)
+    await update.message.reply_text(
+        f"✅ Added *₹{amount:.2f}* to `{uid}` ({u['full_name']})\n"
+        f"New balance: *₹{u['balance_inr'] + amount:.2f}*",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    try:
+        await ctx.bot.send_message(
+            uid,
+            f"🎁 *Bonus Added!*\n\n*₹{amount:.2f}* has been added to your balance by admin!\n"
+            f"New balance: *₹{u['balance_inr'] + amount:.2f}*",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception:
+        pass
+
+# /pendings — show all pending withdrawal requests
+async def pending_withdrawals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    rows = list(wdraw_col.find({"status": "pending"}).sort("requested_at", 1).limit(20))
+    if not rows:
+        await update.message.reply_text("✅ No pending withdrawals!")
+        return
+    lines = ""
+    for r in rows:
+        u    = get_user(r["user_id"])
+        name = u["full_name"] if u else "Unknown"
+        dt   = r["requested_at"].strftime("%m/%d %H:%M") if isinstance(r["requested_at"], datetime.datetime) else str(r["requested_at"])[:13]
+        lines += (
+            f"👤 *{name}* (`{r['user_id']}`)\n"
+            f"   💸 ₹{r['amount_inr']:.2f} via *{r['method']}*\n"
+            f"   📬 `{r['address']}`\n"
+            f"   🕐 {dt}\n"
+            f"   `/approve {r['user_id']}` | `/reject {r['user_id']}`\n\n"
+        )
+    await update.message.reply_text(
+        f"⏳ *Pending Withdrawals* ({len(rows)})\n\n{lines}",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 # ─────────────────────────────────────────────
 #  EXTRA USER COMMANDS
@@ -743,6 +941,11 @@ def main():
     app.add_handler(CommandHandler("reject",      admin_reject))
     app.add_handler(CommandHandler("astats",      admin_stats))
     app.add_handler(CommandHandler("ban",         admin_ban))
+    app.add_handler(CommandHandler("users",       list_users))
+    app.add_handler(CommandHandler("userinfo",    user_info))
+    app.add_handler(CommandHandler("allbalances", all_balances))
+    app.add_handler(CommandHandler("addbalance",  add_balance_cmd))
+    app.add_handler(CommandHandler("pendings",    pending_withdrawals))
     app.add_handler(CommandHandler("broadcast",        broadcast))
     app.add_handler(CommandHandler("broadcast_button", broadcast_button))
     app.add_handler(CommandHandler("broadcast_photo",  broadcast_photo))
