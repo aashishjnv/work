@@ -518,22 +518,176 @@ async def admin_ban(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
+# ─────────────────────────────────────────────
+#  BROADCAST FEATURES
+# ─────────────────────────────────────────────
+
+# Helper to get all active users
+def get_all_users():
+    return list(users_col.find({"is_banned": False}, {"user_id": 1}))
+
+# /broadcast <message>
+# Sends a text message to all users
 async def broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
     if not ctx.args:
-        await update.message.reply_text("Usage: /broadcast <message>")
+        await update.message.reply_text(
+            "📢 *Broadcast Text*\n\nUsage:\n`/broadcast Your message here`\n\n"
+            "Example:\n`/broadcast 🎉 New update is live!`",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
-    msg  = " ".join(ctx.args)
-    all_users = list(users_col.find({"is_banned": False}, {"user_id": 1}))
-    sent = 0
+    msg = " ".join(ctx.args)
+    all_users = get_all_users()
+    progress = await update.message.reply_text(f"📤 Sending to {len(all_users)} users...")
+    sent = failed = 0
     for u in all_users:
         try:
-            await ctx.bot.send_message(u["user_id"], f"📢 *Announcement*\n\n{msg}", parse_mode=ParseMode.MARKDOWN)
+            await ctx.bot.send_message(
+                u["user_id"],
+                f"📢 *Announcement*\n\n{msg}",
+                parse_mode=ParseMode.MARKDOWN
+            )
             sent += 1
         except Exception:
-            pass
-    await update.message.reply_text(f"✅ Broadcast sent to {sent} users.")
+            failed += 1
+    await progress.edit_text(
+        f"✅ *Broadcast Complete!*\n\n"
+        f"📤 Sent: *{sent}*\n"
+        f"❌ Failed: *{failed}* (blocked/inactive users)",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# /broadcast_button <button text> | <button url> | <message>
+# Sends a message with a clickable button to all users
+async def broadcast_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    if not ctx.args:
+        await update.message.reply_text(
+            "🔘 *Broadcast with Button*\n\nUsage:\n"
+            "`/broadcast_button Button Text | https://link.com | Your message here`\n\n"
+            "Example:\n"
+            "`/broadcast_button Join Now | https://t.me/mychannel | 🎉 Join our channel for rewards!`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    full = " ".join(ctx.args)
+    parts = [p.strip() for p in full.split("|")]
+    if len(parts) < 3:
+        await update.message.reply_text(
+            "❌ Wrong format!\n\nUse:\n`/broadcast_button Button Text | https://link.com | Your message`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    btn_text, btn_url, msg = parts[0], parts[1], parts[2]
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(btn_text, url=btn_url)]])
+    all_users = get_all_users()
+    progress = await update.message.reply_text(f"📤 Sending to {len(all_users)} users...")
+    sent = failed = 0
+    for u in all_users:
+        try:
+            await ctx.bot.send_message(
+                u["user_id"],
+                f"📢 *Announcement*\n\n{msg}",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=kb
+            )
+            sent += 1
+        except Exception:
+            failed += 1
+    await progress.edit_text(
+        f"✅ *Broadcast with Button Complete!*\n\n"
+        f"📤 Sent: *{sent}*\n"
+        f"❌ Failed: *{failed}*",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# /broadcast_photo <caption>  (send with a photo attached)
+# Admin sends this command as a REPLY to a photo
+async def broadcast_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    # Must be used as reply to a photo message
+    if not update.message.reply_to_message or not update.message.reply_to_message.photo:
+        await update.message.reply_text(
+            "🖼 *Broadcast with Photo*\n\n"
+            "How to use:\n"
+            "1️⃣ Send a photo to the bot\n"
+            "2️⃣ *Reply* to that photo with:\n"
+            "`/broadcast_photo Your caption here`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    photo_id = update.message.reply_to_message.photo[-1].file_id
+    caption  = " ".join(ctx.args) if ctx.args else "📢 New Announcement!"
+    all_users = get_all_users()
+    progress = await update.message.reply_text(f"📤 Sending photo to {len(all_users)} users...")
+    sent = failed = 0
+    for u in all_users:
+        try:
+            await ctx.bot.send_photo(
+                u["user_id"],
+                photo=photo_id,
+                caption=f"📢 *Announcement*\n\n{caption}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            sent += 1
+        except Exception:
+            failed += 1
+    await progress.edit_text(
+        f"✅ *Photo Broadcast Complete!*\n\n"
+        f"📤 Sent: *{sent}*\n"
+        f"❌ Failed: *{failed}*",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# /msg <user_id> <message>
+# Send a private message to one specific user
+async def msg_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    if not ctx.args or len(ctx.args) < 2:
+        await update.message.reply_text(
+            "💬 *Message One User*\n\nUsage:\n`/msg 987654321 Your message here`\n\n"
+            "Example:\n`/msg 987654321 Your withdrawal has been processed!`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    try:
+        uid = int(ctx.args[0])
+        msg = " ".join(ctx.args[1:])
+        await ctx.bot.send_message(
+            uid,
+            f"💬 *Message from Admin*\n\n{msg}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await update.message.reply_text(f"✅ Message sent to user `{uid}`", parse_mode=ParseMode.MARKDOWN)
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID! Must be a number.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to send: {e}")
+
+# /admin_help — shows all admin commands
+async def admin_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    text = (
+        "🛡 *Admin Commands*\n\n"
+        "━━━━ 📢 Broadcast ━━━━\n"
+        "`/broadcast <msg>` — Text to all users\n"
+        "`/broadcast_button Btn | URL | msg` — Message with button\n"
+        "`/broadcast_photo <caption>` — Reply to photo to send it\n"
+        "`/msg <user_id> <msg>` — Message one user\n\n"
+        "━━━━ 💸 Withdrawals ━━━━\n"
+        "`/approve <user_id>` — Approve withdrawal\n"
+        "`/reject <user_id>` — Reject & refund\n\n"
+        "━━━━ 👤 Users ━━━━\n"
+        "`/ban <user_id>` — Ban a user\n"
+        "`/astats` — Bot statistics\n"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 # ─────────────────────────────────────────────
 #  EXTRA USER COMMANDS
@@ -589,7 +743,11 @@ def main():
     app.add_handler(CommandHandler("reject",      admin_reject))
     app.add_handler(CommandHandler("astats",      admin_stats))
     app.add_handler(CommandHandler("ban",         admin_ban))
-    app.add_handler(CommandHandler("broadcast",   broadcast))
+    app.add_handler(CommandHandler("broadcast",        broadcast))
+    app.add_handler(CommandHandler("broadcast_button", broadcast_button))
+    app.add_handler(CommandHandler("broadcast_photo",  broadcast_photo))
+    app.add_handler(CommandHandler("msg",              msg_user))
+    app.add_handler(CommandHandler("admin_help",       admin_help))
 
     app.add_handler(CallbackQueryHandler(check_join_callback, pattern="^check_join_"))
     app.add_handler(CallbackQueryHandler(button_handler))
