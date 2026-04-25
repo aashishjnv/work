@@ -90,8 +90,11 @@ async def is_member(bot, user_id):
 # ─────────────────────────────────────────────
 #  KEYBOARDS
 # ─────────────────────────────────────────────
+MINI_APP_URL = os.environ.get("MINI_APP_URL", "")
+
 def main_menu_kb():
-    return InlineKeyboardMarkup([
+    from telegram import WebAppInfo
+    kb = [
         [InlineKeyboardButton("💰 My Balance",   callback_data="balance"),
          InlineKeyboardButton("👥 Referrals",    callback_data="referrals")],
         [InlineKeyboardButton("💸 Withdraw",     callback_data="withdraw"),
@@ -101,7 +104,10 @@ def main_menu_kb():
         [InlineKeyboardButton("📋 My History",   callback_data="history"),
          InlineKeyboardButton("🆘 Support",      callback_data="support")],
         [InlineKeyboardButton("❤️ Support Us / Donate", callback_data="donate")],
-    ])
+    ]
+    if MINI_APP_URL:
+        kb.insert(0, [InlineKeyboardButton("🎮 Tap Game & Wallet", web_app=WebAppInfo(url=MINI_APP_URL))])
+    return InlineKeyboardMarkup(kb)
 
 def back_kb():
     return InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Menu", callback_data="menu")]])
